@@ -1,0 +1,324 @@
+---
+title: "Assignment1_ArujanSrimohan_100750053"
+author: "Arujan Srimohan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Tracking Canada's Adoption of Electric Vehicles
+With the rising concern of climate change and prices of natural resources such as 
+gas and oil ballooning, the electric vehicle market is on the rise. These upcoming charts will show us how
+the EV market has been changing over the years and how the adoption rate differs across the country.
+This data was collected from the government of Canada called *New motor vehicle registrations, quarterly - Dataset*. 
+```{r libraries, echo = FALSE, include = TRUE, message = FALSE}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(ggalluvial)
+library(sf)
+library(maps)
+library(canadianmaps)
+
+vehicle_data <- read_csv("canada_vehicle_registration.csv")
+
+#First we will drop all the unwanted vehicle data to work with a more concise
+#data set
+vehicle_data <- filter(vehicle_data,
+    `Fuel type` %in% c("Gasoline", "Hybrid electric",
+                        "Plug-in hybrid electric", "Battery electric",
+                        "All zero-emission vehicles"))
+
+#We also need to remove a couple provinces that don't share data
+vehicle_data <- filter(vehicle_data,
+    !GEO %in% c("Alberta", "Newfoundland and Labrador", "Nova Scotia"))
+
+#Then we will combine repetitive categories to help our dataset
+#retain focus on the topic
+vehicle_data <- mutate(vehicle_data, `Fuel Category` = case_when(
+    `Fuel type` == "Gasoline" ~ "Gasoline Vehicles",
+    `Fuel type` %in% c("Hybrid electric",
+                       "Plug-in hybrid electric") ~ "Hybrid Vehicles",
+    `Fuel type` %in% c("Battery electric",
+                       "All zero-emission vehicles") ~ "Electric Vehicles"),
+    #Convert to numeric to use as continuous variable
+    Year = as.numeric(substr(REF_DATE, 1, 4)))
+
+# The dataset will have rows with repetitive new groupings so lets clean them up
+vehicle_data <- group_by(vehicle_data,
+                         Year, GEO, `Vehicle type`, `Fuel Category`) |>
+    summarize(registrations = sum(VALUE))
+
+#vehicle_data is now our base cleaned data
+```
+
+First, let's examine the share each fuel type has on the market at the beginning of 2025:
+```{r, echo = FALSE, fig.width=12, fig.height=6, out.width = "100%", include = TRUE, message = FALSE}
+#Let's use all the "toal, vehicle type" counts for canada in 2024
+canada_totals <- filter(vehicle_data, `Vehicle type` == "Total, vehicle type",
+    Year == 2024,
+    GEO == "Canada")
+
+#Then let's calculate the share each count has against the sum of all counts
+canada_totals <- mutate(canada_totals,
+                        share = registrations / sum(registrations))
+
+#Use a pie chart to show proportions using share column we calculated
+#and fill using the registrations per fuel category
+ggplot(canada_totals, aes(x = "", y = registrations, fill = `Fuel Category`,
+                          label = percent(share))) +
+    geom_bar(stat = "identity", width = 1) +
+    geom_text(position = position_stack(vjust = 0.5)) +
+    coord_polar(theta = "y") +
+    scale_fill_brewer(
+        palette = "RdYlBu",
+        name = "Fuel Category"
+    ) +
+    theme_void() +
+    labs(title = "Vehicle Registrations by Fuel Category 2024",
+        color = "Fuel Category"
+    ) +
+    theme(plot.title = element_text(face = "bold", size= 20, hjust = 0.5),
+          legend.position = "left",
+          legend.title = element_text(size = 15),
+          legend.text = element_text(face = "italic", size = 12))
+```
+This pie chart provides a clear view of how the market is divided among the categories at a national 
+level. Currently, eco-friendly vehicle options are at an adoption rate of about **35%** across the country.
+
+What does this vehicle share look like across the country?
+```{r, echo = FALSE, fig.width=12, fig.height=6, out.width = "100%", include = TRUE, message = FALSE}
+#Take our base cleaned data and remove national data rows and rows not in 2024
+#and keep the totals for vehicle type data
+fuel_type_totals <- filter(vehicle_data, `Vehicle type` == "Total, vehicle type",
+    Year == 2024,
+    GEO != "Canada")
+
+#Now plot a grouped bar chart, with each group being a province, and 3 bars per group
+#where the bars are the fuel category
+ggplot(fuel_type_totals, aes(x = GEO, y = registrations, fill = `Fuel Category`)) +
+    geom_bar(stat = "identity", position = position_dodge()) +
+    scale_y_continuous(breaks = breaks_width(25000),
+                       labels = comma,
+                       expand = c(0, 0)) +
+    labs(title = "Provincial Vehicle Registrations by Fuel Category 2024",
+        x = "Province",
+        y = "Number of Vehicles Registered",
+        color = "Fuel Category"
+    ) +
+    scale_fill_manual(
+        values = c("Gasoline Vehicles" = "firebrick3",
+                "Hybrid Vehicles" = "seagreen3",
+                "Electric Vehicles" = "dodgerblue1")
+    ) +
+    theme(plot.title = element_text(face = "bold", size= 20, hjust = 0.5),
+          panel.background = element_rect(fill = "white", color = "black"),
+          panel.grid.major = element_line(color = "gray", linewidth = 0.5),
+          panel.grid.minor = element_blank(),
+          legend.title = element_text(size = 15),
+          legend.text = element_text(face = "italic", size = 12))
+
+```
+Here we compare each province's vehicle share side by side, showing us the magnitude in differences
+in each fuel type's adoption. This visualization helps highlight provinces where EV registrations only
+contribute a small amount to the market, and subsequently suggests that this is just a reflection of the
+low registrations in the province as a whole.
+
+Next, let's try to understand how Canada has grown to this point:
+```{r, echo = FALSE, fig.width=12, fig.height=6, out.width = "100%", include = TRUE, message = FALSE}
+#Filter out any row that does not have totals for vehicle type, we want
+#values where the fuel category is EVs and we are look at provincial totals
+#over the year not national
+ev_totals <- filter(vehicle_data, `Vehicle type` == "Total, vehicle type",
+    `Fuel Category` == "Electric Vehicles",
+    GEO != "Canada")
+
+#Plot the totals for the provinces over the years to see how the 
+#adoption of EVs has grown
+ggplot(ev_totals, aes(x = Year, y = registrations, color = GEO)) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 2) +
+    scale_x_continuous(breaks = c(2017, 2018, 2019, 2020, 2021,
+                                  2022, 2023, 2024)) +
+    scale_y_continuous(breaks = breaks_width(25000),
+                       labels = comma) +
+    labs(title = "EV Adoption over the Years",
+        x = "Year",
+        y = "Number of EVs Registered",
+        color = "Province"
+    ) +
+    theme(plot.title = element_text(face = "bold", size= 20, hjust = 0.5),
+          axis.line = element_line(colour = "black"),
+          legend.position = "left",
+          legend.title = element_text(size = 15),
+          legend.text = element_text(face = "italic", size = 12))
+
+```
+If we take a look at our graph, one key consistency is the growth in EV registrations after the year 2019.
+On **May 1st, 2019** the *iZEV* program was introduced by the government of Canada 
+to give citizens a **$5000** rebate for any zero emission vehicle purchase.
+It's clear the impact incentives can have, and this has helped mitigate the higher barrier of entry EVs pose when
+trying to purchase a vehicle.  
+
+Subsequently, we see the provinces Saskatchewan, PEI, and others unable to scratch  **10,000** 
+EV registrations per year. We see highly populated provinces like Ontario and British Columbia having their growth wane.
+Maybe their vehicle market share has hit a plateau. Let's take a look:
+```{r, echo = FALSE, fig.width=22, fig.height=16, out.width = "100%", include = TRUE, message = FALSE}
+#We want to map each fuel category to each vehicle type to each province
+#Start by filtering for specific vehicle types across the provinces
+vehicle_flow_data <- filter(vehicle_data, `Vehicle type` != "Total, vehicle type",
+                      Year == 2024,
+                      GEO != "Canada")
+#Then group the results by vehicle type, fuel category and GEO, so we can summarize
+#and count the total registrations for each group
+vehicle_flow_data <- group_by(vehicle_flow_data,
+                              `Vehicle type`, `Fuel Category`, GEO) |>
+    summarize(registrations = sum(registrations))
+
+#Create the Sankey graph that will map our areas of focus, 
+#fuel categories -> vehicle type
+ggplot(vehicle_flow_data, aes(y = registrations, axis2 = `Vehicle type`,
+                              axis1 = `Fuel Category`)) +
+  #Alluvium flows are the band, alpha is the transparency
+  geom_alluvium(aes(fill = `Fuel Category`), width = 1/10, alpha = 0.5) +
+  #Stratum is our axis labelling method for the sankey(label blocks)
+  geom_stratum(width = 1/10, fill = "grey", color = "black") +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum)),
+            angle = -15, hjust = 0.4, size = 7) +
+  #Make the plot narrower  
+  scale_x_discrete(expand = c(0.1, 0.1)) +
+  scale_fill_manual(
+    values = c("Gasoline Vehicles" = "firebrick3",
+                "Hybrid Vehicles" = "seagreen3",
+                "Electric Vehicles" = "dodgerblue1")
+  ) +
+  #Need more space because of long label names
+  coord_cartesian(clip = "off") +
+  labs(
+    title = "Flow of Vehicle Registrations to Type 2024",
+  ) +
+  theme_void(base_size = 20) +
+  theme(plot.title = element_text(face = "bold", size= 30, hjust = 0.5),
+        legend.title = element_text(size = 25),
+        legend.text = element_text(face = "italic", size = 20))
+
+#Lets make the sankey to complete our mapping 
+#vehicle type -> province
+ggplot(vehicle_flow_data, aes(y = registrations, axis2 = `Vehicle type`,
+                              axis1 = `GEO`)) +
+  geom_alluvium(aes(fill = `Fuel Category`), width = 1/10, alpha = 0.5) +
+  geom_stratum(width = 1/10, fill = "grey", color = "black") +
+  geom_text(stat = "stratum", aes(label = after_stat(stratum)),
+            angle = -15, hjust = 0.4, size = 7) +
+  scale_fill_manual(
+    values = c("Gasoline Vehicles" = "firebrick3",
+                "Hybrid Vehicles" = "seagreen3",
+                "Electric Vehicles" = "dodgerblue1")
+  ) +
+  #Make vertical flowing sankey
+  coord_flip(clip = "off") +
+  labs(
+    title = "Flow of Vehicle Type to Provinces Registered in 2024",
+  ) +
+  theme_void(base_size = 20) +
+  theme(plot.title = element_text(face = "bold", size= 30, hjust = 0.5),
+        legend.title = element_text(size = 25),
+        legend.text = element_text(face = "italic", size = 20))
+```
+The first sankey plot shows us which fuel categories are most registered in which vehicle types. The second plot
+shows us the volume of the vehicle types being registered in each province. Understanding the vehicle 
+segments driving EV adoption is critical to see where improvements are needed. These diagrams show us
+the success of multi-purpose vehicles, particularly in Quebec, where EV adoption now surpasses
+gasoline options. Conversely, we find that bigger vehicles with more emissions are harder to electrify well because of 
+factors like **mileage, horsepower, and torque**. This highlights the impact that technological readiness and suitability has
+on the adoption of EVs. 
+
+Finally, let's look at the growth of EVs over time from a geographical context.
+```{r, echo = FALSE, fig.width=12, fig.height=8, out.width = "100%", include = TRUE, message = FALSE}
+#Take our base cleaned data and remove national data rows and rows not in 2024
+#and keep the Totals for vehicle type data per province
+province_vehicle_totals <- filter(vehicle_data,
+                                  `Vehicle type` == "Total, vehicle type",
+                                  Year %in% c(2017,2024),
+                                  GEO != "Canada")
+
+#Then group the results by GEO, so we can summarize
+#and count the total registrations for each province, there is a catch though
+province_vehicle_totals <- group_by(province_vehicle_totals, Year, GEO) |>
+    summarize(
+        total_registrations = sum(registrations),
+        ev_registrations = sum(ifelse(`Fuel Category` == "Electric Vehicles",
+                                      registrations, 0)))
+
+#Get a percentage that we will map
+province_vehicle_totals <- province_vehicle_totals %>%
+  mutate(ev_percentage = (ev_registrations / total_registrations) * 100)
+
+#We need to make rows for the territories since the dataset combines them all
+#with BC, let's clone the BC row and mutate it into each territory
+#this approach will let BC and all the territories have the same shared value
+
+#Extract bc data
+bc_territory_rows <- province_vehicle_totals %>%
+  filter(GEO == "British Columbia and the Territories")
+
+#Create extra rows for each province/territory and mutate to change
+#the name
+bc_row <- mutate(bc_territory_rows, GEO = "British Columbia")
+yukon_row <- mutate(bc_territory_rows, GEO = "Yukon")
+nwt_row <- mutate(bc_territory_rows, GEO = "Northwest Territories")
+nunavut_row <- mutate(bc_territory_rows, GEO = "Nunavut")
+
+# Combine the extra rows
+extra_rows <- bind_rows(bc_row, yukon_row, nwt_row, nunavut_row)
+
+# glimpse(extra_rows)
+# Remove the combined row from the original dataset and add the new rows
+province_vehicle_totals_final <- filter(province_vehicle_totals,
+                                        GEO != "British Columbia and the Territories")
+
+province_vehicle_totals_final <- bind_rows(province_vehicle_totals_final,
+                                           extra_rows)
+
+
+#Now lets combine the geometry data from canadianmaps to our registrations
+#The prename column is equivalent to GEO if we look at candianmaps docs
+canada_data <- left_join(PROV, province_vehicle_totals_final,
+                         join_by("PRENAME" == "GEO"))
+#Remove all null data points because left join will retain
+#data for all provinces in canadianmaps but our dataset
+#wasn't allowed to collect Alberta, Newfoundland and Labrador, Nova Scotia
+canada_data <- canada_data |> filter(!is.na(Year))
+
+#Create the sf map to show EV Registrations across the country
+ggplot(canada_data, aes(fill = ev_percentage/100)) +
+  geom_sf(color = "gray90", size = 0.1) +
+  #Gradient for a smooth transition over our map
+  scale_fill_gradient(low = "white",
+    high = "midnightblue",
+    labels = percent,
+    name = "EV Registrations"
+  ) +
+  labs(title = "Electric Vehicle Registrations by Province (2024)") +
+  facet_wrap(~Year)+
+  theme_map() +
+  #Change legend to a gradient bar
+  guides(fill = guide_colorbar(theme =
+                                theme(legend.key.width = unit(1, "null"),
+                                      legend.frame =
+                                      element_rect(colour = "black")))) +
+  theme_void(base_size = 10) +
+  theme(legend.position = "bottom",
+        legend.title = element_text(size = 12, vjust = 0.8),
+        legend.text = element_text(size = 15),
+        plot.title = element_text(face = "bold", size= 20, vjust = 3, hjust = 0.5))
+```
+This map visualizes the percentage of EV registrations across the provinces and territories, 
+offering a spatial perspective on the regional disparities we have been exploring. Provinces and territories 
+where the EVs are starting to eat up market share are darker on the color gradient. Conversely, the color gradient
+highlights the area with lower registrations as lighter colors, giving a clear picture of where additional 
+EV infrastructure and incentives might be needed.
+
+Overall we can conclude that while EV registrations are growing nationwide, the pace and nature of their
+growth vary by region and vehicle type. Factors like charging infrastructure, government incentives,
+fuel economy, and time in the market all contribute to the challenges of adopting EVs in different regions.
